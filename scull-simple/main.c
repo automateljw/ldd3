@@ -53,7 +53,9 @@ MODULE_AUTHOR("Alessandro Rubini, Jonathan Corbet");
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct scull_dev *scull_devices;	/* allocated in scull_init_module */
+char scull_name[][7]={"scull0","scull1","scull2","scull3"};
 
+struct class *scull_class;
 
 /*
  * Empty out the scull device; must be called with the device
@@ -61,15 +63,16 @@ struct scull_dev *scull_devices;	/* allocated in scull_init_module */
  */
 int scull_trim(struct scull_dev *dev)
 {
-	struct scull_qset *next, *dptr;
+	struct scull_qset *next, *dptr; /* dptr for curren scull_qset */
+					/* next for next scull_qset */
 	int qset = dev->qset;   /* "dev" is not-null */
 	int i;
 
 	for (dptr = dev->data; dptr; dptr = next) { /* all the list items */
 		if (dptr->data) {
 			for (i = 0; i < qset; i++)
-				kfree(dptr->data[i]);
-			kfree(dptr->data);
+				kfree(dptr->data[i]); /* free quantum */
+			kfree(dptr->data); /* free point arry */
 			dptr->data = NULL;
 		}
 		next = dptr->next;
@@ -341,7 +344,7 @@ ssize_t scull_write(struct file *filp, const char __user *buf, size_t count,
 	struct scull_dev *dev = filp->private_data;
 	struct scull_qset *dptr;
 	int quantum = dev->quantum, qset = dev->qset;
-	int itemsize = quantum * qset;
+	int itemsize = quantum * qset; 
 	int item, s_pos, q_pos, rest;
 	ssize_t retval = -ENOMEM; /* value used in "goto out" statements */
 
@@ -569,7 +572,7 @@ struct file_operations scull_fops = {
  * Thefore, it must be careful to work correctly even if some of the items
  * have not been initialized
  */
-void scull_cleanup_module(void)
+void  scull_cleanup_module(void)
 {
 	int i;
 	dev_t devno = MKDEV(scull_major, scull_minor);
@@ -579,6 +582,8 @@ void scull_cleanup_module(void)
 		for (i = 0; i < scull_nr_devs; i++) {
 			scull_trim(scull_devices + i);
 			cdev_del(&scull_devices[i].cdev);
+			devno = MKDEV(scull_major, scull_minor+i);
+			device_destroy(scull_class,devno);
 		}
 		kfree(scull_devices);
 	}
@@ -587,14 +592,21 @@ void scull_cleanup_module(void)
 	scull_remove_proc();
 #endif
 
+	class_destroy(scull_class);
+
+
 	/* cleanup_module is never called if registering failed */
 	unregister_chrdev_region(devno, scull_nr_devs);
+
+
 
 	/* and call the cleanup functions for friend devices */
 //	scull_p_cleanup();
 //	scull_access_cleanup();
 
 }
+
+
 
 
 /*
@@ -614,11 +626,13 @@ static void scull_setup_cdev(struct scull_dev *dev, int index)
 }
 
 
-int scull_init_module(void)
+
+
+int  scull_init_module(void)
 {
 	int result, i;
 	dev_t dev = 0;
-	struct class *scull_class;
+
 
 /*
  * Get a range of minor numbers to work with, asking for a dynamic
@@ -643,6 +657,8 @@ int scull_init_module(void)
 	 * can be specified at load time
 	 */
 	scull_devices = kmalloc(scull_nr_devs * sizeof(struct scull_dev), GFP_KERNEL);
+	/* this scull driver can be used to many scull_devices*/	
+
 	if (!scull_devices) {
 		result = -ENOMEM;
 		goto fail;  /* Make this more graceful */
@@ -650,6 +666,7 @@ int scull_init_module(void)
 	memset(scull_devices, 0, scull_nr_devs * sizeof(struct scull_dev));
 
 	scull_class = class_create(THIS_MODULE,"scull_class");
+	/* create /sys/class/scull_class interface */
 
         /* Initialize each device. */
 	for (i = 0; i < scull_nr_devs; i++) {
@@ -657,7 +674,7 @@ int scull_init_module(void)
 		scull_devices[i].qset = scull_qset;
 		sema_init(&scull_devices[i].sem, 1);
 		scull_setup_cdev(&scull_devices[i], i);
-		device_create(scull_class,NULL,MKDEV(scull_major,i),NULL,"scull_device");
+		device_create(scull_class,NULL,MKDEV(scull_major,i),NULL,scull_name[i]);
 	}
 
         /* At this point call the init function for any friend device */
